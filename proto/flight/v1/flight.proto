@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package flight.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "flight-booking/gen/flight/v1;flightv1";
+
+// Статус рейса.
+enum FlightStatus {
+  FLIGHT_STATUS_UNSPECIFIED = 0;
+  FLIGHT_STATUS_SCHEDULED = 1;
+  FLIGHT_STATUS_DEPARTED = 2;
+  FLIGHT_STATUS_CANCELLED = 3;
+  FLIGHT_STATUS_COMPLETED = 4;
+}
+
+// Статус резервации мест.
+enum ReservationStatus {
+  RESERVATION_STATUS_UNSPECIFIED = 0;
+  RESERVATION_STATUS_ACTIVE = 1;
+  RESERVATION_STATUS_RELEASED = 2;
+  RESERVATION_STATUS_EXPIRED = 3;
+}
+
+message Flight {
+  string id = 1;
+  string flight_number = 2;      // например SU1234
+  string airline = 3;
+  string origin = 4;             // IATA, например VKO
+  string destination = 5;        // IATA, например LED
+  google.protobuf.Timestamp departure_time = 6;
+  google.protobuf.Timestamp arrival_time = 7;
+  int32 total_seats = 8;
+  int32 available_seats = 9;
+  double price = 10;             // цена одного места
+  FlightStatus status = 11;
+}
+
+message SearchFlightsRequest {
+  // IATA-код аэропорта вылета. Обязателен.
+  string origin = 1;
+  // IATA-код аэропорта прилёта. Обязателен.
+  string destination = 2;
+  // Дата вылета, опционально (фильтр по дате).
+  google.protobuf.Timestamp departure_date = 3;
+}
+
+message SearchFlightsResponse {
+  repeated Flight flights = 1; // только рейсы со статусом SCHEDULED
+}
+
+message GetFlightRequest {
+  string flight_id = 1;
+}
+
+message GetFlightResponse {
+  Flight flight = 1;
+}
+
+message ReserveSeatsRequest {
+  string flight_id = 1;
+  // Идентификатор бронирования в Booking Service.
+  // Одному бронированию соответствует ровно одна резервация.
+  string booking_id = 2;
+  int32 seat_count = 3;
+}
+
+message ReserveSeatsResponse {
+  string reservation_id = 1;
+}
+
+message ReleaseReservationRequest {
+  string booking_id = 1;
+}
+
+message ReleaseReservationResponse {
+  string reservation_id = 1;
+}
+
+// gRPC API управления рейсами и местами.
+service FlightService {
+  // Поиск рейсов по маршруту (origin, destination) и опционально по дате.
+  // Возвращает только рейсы со статусом SCHEDULED.
+  // Ошибки: INVALID_ARGUMENT (пустые/невалидные origin/destination).
+  rpc SearchFlights(SearchFlightsRequest) returns (SearchFlightsResponse);
+
+  // Получение рейса по ID.
+  // Ошибки: NOT_FOUND.
+  rpc GetFlight(GetFlightRequest) returns (GetFlightResponse);
+
+  // Резервирование мест для бронирования. Атомарно проверяет доступность
+  // и уменьшает available_seats, создаёт SeatReservation.
+  // Ошибки:
+  //   NOT_FOUND           - рейс не найден;
+  //   INVALID_ARGUMENT    - seat_count <= 0;
+  //   RESOURCE_EXHAUSTED  - недостаточно мест;
+  //   FAILED_PRECONDITION - рейс не в статусе SCHEDULED.
+  rpc ReserveSeats(ReserveSeatsRequest) returns (ReserveSeatsResponse);
+
+  // Отмена резервирования: возврат мест, статус резервации -> RELEASED.
+  // Ошибки: NOT_FOUND (нет активной резервации у бронирования).
+  rpc ReleaseReservation(ReleaseReservationRequest) returns (ReleaseReservationResponse);
+}

@@ -1,0 +1,166 @@
+services:
+  flight-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flight
+      POSTGRES_PASSWORD: flight
+      POSTGRES_DB: flight_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - flight_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flight -d flight_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  booking-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: booking
+      POSTGRES_PASSWORD: booking
+      POSTGRES_DB: booking_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - booking_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking -d booking_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-master:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    networks:
+      redis_net:
+        ipv4_address: 172.28.0.2
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-replica:
+    image: redis:7-alpine
+    command: redis-server --replicaof 172.28.0.2 6379
+    ports:
+      - "6381:6379"
+    networks:
+      redis_net:
+        ipv4_address: 172.28.0.3
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-sentinel:
+    image: redis:7-alpine
+    command: redis-server /sentinel/sentinel.conf --sentinel
+    ports:
+      - "26379:26379"
+    networks:
+      default: {}
+      redis_net:
+        ipv4_address: 172.28.0.4
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    volumes:
+      - ./sentinel:/sentinel
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  flight-migrations:
+    image: flyway/flyway:10
+    depends_on:
+      flight-db:
+        condition: service_healthy
+    command: >
+      -url=jdbc:postgresql://flight-db:5432/flight_db
+      -user=flight -password=flight
+      -locations=filesystem:/flyway/sql -connectRetries=60 migrate
+    volumes:
+      - ./migrations/flight:/flyway/sql
+
+  booking-migrations:
+    image: flyway/flyway:10
+    depends_on:
+      booking-db:
+        condition: service_healthy
+    command: >
+      -url=jdbc:postgresql://booking-db:5432/booking_db
+      -user=booking -password=booking
+      -locations=filesystem:/flyway/sql -connectRetries=60 migrate
+    volumes:
+      - ./migrations/booking:/flyway/sql
+
+  flight:
+    build:
+      context: .
+      dockerfile: flight.Dockerfile
+    depends_on:
+      flight-db:
+        condition: service_healthy
+      flight-migrations:
+        condition: service_completed_successfully
+      redis-sentinel:
+        condition: service_healthy
+    environment:
+      GRPC_PORT: "50051"
+      DATABASE_URL: postgres://flight:flight@flight-db:5432/flight_db?sslmode=disable
+      FLIGHT_API_KEY: ${FLIGHT_API_KEY:-booking-secret}
+      REDIS_SENTINEL_ADDRS: redis-sentinel:26379
+      REDIS_MASTER_NAME: mymaster
+      CACHE_TTL: 5m
+    ports:
+      - "50051:50051"
+    networks:
+      default: {}
+      redis_net: {}
+    restart: on-failure
+
+  booking:
+    build:
+      context: .
+      dockerfile: booking.Dockerfile
+    depends_on:
+      booking-db:
+        condition: service_healthy
+      booking-migrations:
+        condition: service_completed_successfully
+      flight:
+        condition: service_started
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://booking:booking@booking-db:5432/booking_db?sslmode=disable
+      FLIGHT_ADDR: flight:50051
+      FLIGHT_API_KEY: ${FLIGHT_API_KEY:-booking-secret}
+      RETRY_MAX_ATTEMPTS: "3"
+      RETRY_BASE_DELAY_MS: "100"
+    ports:
+      - "8080:8080"
+    restart: on-failure
+
+volumes:
+  flight_pg_data:
+  booking_pg_data:
+
+networks:
+  redis_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
