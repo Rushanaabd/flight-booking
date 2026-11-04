@@ -2,7 +2,7 @@
 
 Бронирование авиабилетов: два микросервиса с раздельными БД
 Go + Gin (REST) + gRPC + PostgreSQL + Flyway + Redis (Sentinel)
-Client (REST), Booking Service, (gRPC), Flight Service; у каждого своя PostgreSQL, во Flight Service - кеш Cache-Aside в Redis Sentinel
+Client (REST), Booking Service (gRPC), Flight Service; у каждого своя PostgreSQL, во Flight Service - кеш Cache-Aside в Redis Sentinel
 
 ## Архитектура
 
